@@ -8,55 +8,228 @@ datasource db {
 }
 
 enum UserRole {
+  SUPER_ADMIN
   ADMIN
   TEACHER
   STUDENT
   PARENT
+  ACCOUNTANT
+  LIBRARIAN
+}
+
+enum TokenType {
+  REFRESH
+  EMAIL_VERIFY
+  PASSWORD_RESET
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String
-  fullName     String
-  role         UserRole
-  isMfaEnabled Boolean  @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                  String         @id @default(cuid())
+  email               String         @unique
+  passwordHash        String
+  fullName            String
+  mfaSecretEncrypted  String?
+  isMfaEnabled        Boolean        @default(false)
+  roles               UserRoleMap[]
+  sessions            Session[]
+  tokens              AuthToken[]
+  student             Student?
+  teacher             Teacher?
+  parent              Parent?
+  adminProfile        AdminProfile?
+  payments            Payment[]
+  auditLogsAsActor    AuditLog[]     @relation("AuditActor")
+  auditLogsAsTarget   AuditLog[]     @relation("AuditTarget")
+  uploadedFiles       FileAsset[]    @relation("FileOwner")
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  deletedAt           DateTime?
 
-  student Student?
-  teacher Teacher?
-  parent  Parent?
-
-  @@index([role])
   @@index([createdAt])
+  @@index([deletedAt])
 }
 
 model Student {
-  id           String   @id @default(cuid())
-  userId       String   @unique
-  registration String   @unique
+  id           String        @id @default(cuid())
+  userId       String        @unique
+  registration String        @unique
   gradeLevel   String
   guardianNote String?
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   attendances  Attendance[]
   grades       Grade[]
   fees         Fee[]
+  classId      String?
+  class        ClassRoom?    @relation(fields: [classId], references: [id])
+  enrollments  CourseEnroll[]
+  parentId     String?
+  parent       Parent?       @relation(fields: [parentId], references: [id])
+  deletedAt    DateTime?
 
   @@index([registration])
 }
 
 model Teacher {
-  id         String   @id @default(cuid())
-  userId     String   @unique
-  department String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id           String        @id @default(cuid())
+  userId        String        @unique
+  departmentId  String?
+  department    Department?   @relation(fields: [departmentId], references: [id])
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courses       Course[]
+  classes       ClassRoom[]
+  deletedAt     DateTime?
 }
 
 model Parent {
-  id     String @id @default(cuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String       @id @default(cuid())
+  userId    String       @unique
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  students  Student[]
+  deletedAt DateTime?
+}
+
+model AdminProfile {
+  id          String   @id @default(cuid())
+  userId       String   @unique
+  designation  String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Role {
+  id           String            @id @default(cuid())
+  name         UserRole          @unique
+  level        Int
+  isSystem     Boolean           @default(true)
+  permissions  RolePermission[]
+  users        UserRoleMap[]
+}
+
+model Permission {
+  id          String            @id @default(cuid())
+  action      String
+  resource    String
+  description String?
+  roles       RolePermission[]
+
+  @@unique([action, resource])
+  @@index([resource])
+}
+
+model RolePermission {
+  id            String      @id @default(cuid())
+  roleId         String
+  permissionId   String
+  role           Role        @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission     Permission  @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+}
+
+model UserRoleMap {
+  id        String   @id @default(cuid())
+  userId    String
+  roleId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([roleId])
+}
+
+model Session {
+  id                 String    @id @default(cuid())
+  userId             String
+  refreshTokenHash   String
+  deviceId           String
+  userAgent          String?
+  ipAddress          String?
+  expiresAt          DateTime
+  revokedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+}
+
+model AuthToken {
+  id            String    @id @default(cuid())
+  userId         String
+  tokenHash      String
+  type           TokenType
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([expiresAt])
+}
+
+model Department {
+  id          String      @id @default(cuid())
+  name        String      @unique
+  code        String      @unique
+  teachers    Teacher[]
+  subjects    Subject[]
+  createdAt   DateTime    @default(now())
+  deletedAt   DateTime?
+}
+
+model Subject {
+  id           String      @id @default(cuid())
+  code         String      @unique
+  name         String
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id])
+  courses      Course[]
+  createdAt    DateTime    @default(now())
+  deletedAt    DateTime?
+}
+
+model Course {
+  id            String       @id @default(cuid())
+  code          String       @unique
+  name          String
+  subjectId     String?
+  teacherId     String?
+  subject       Subject?     @relation(fields: [subjectId], references: [id])
+  teacher       Teacher?     @relation(fields: [teacherId], references: [id])
+  classes       ClassRoom[]
+  enrollments   CourseEnroll[]
+  createdAt     DateTime     @default(now())
+  deletedAt     DateTime?
+}
+
+model ClassRoom {
+  id            String       @id @default(cuid())
+  code          String       @unique
+  name          String
+  teacherId     String?
+  courseId      String?
+  teacher       Teacher?     @relation(fields: [teacherId], references: [id])
+  course        Course?      @relation(fields: [courseId], references: [id])
+  students      Student[]
+  createdAt     DateTime     @default(now())
+  deletedAt     DateTime?
+}
+
+model CourseEnroll {
+  id          String    @id @default(cuid())
+  courseId    String
+  studentId   String
+  enrolledAt  DateTime  @default(now())
+  course      Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  student     Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([courseId, studentId])
 }
 
 model Attendance {
@@ -94,4 +267,55 @@ model Fee {
 
   @@index([status])
   @@index([dueDate])
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+  userId             String
+  feeId              String?
+  stripePaymentId    String?       @unique
+  stripeIntentId     String?       @unique
+  amount             Float
+  currency           String        @default("usd")
+  status             PaymentStatus @default(PENDING)
+  refundAmount       Float?
+  paidAt             DateTime?
+  createdAt          DateTime      @default(now())
+  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model FileAsset {
+  id            String    @id @default(cuid())
+  ownerId        String
+  storage        String
+  bucket         String?
+  path           String
+  mimeType       String
+  size           Int
+  checksum       String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  owner          User     @relation("FileOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+}
+
+model AuditLog {
+  id            String    @id @default(cuid())
+  actorId        String?
+  targetUserId   String?
+  action         String
+  resource       String
+  resourceId     String?
+  status         String
+  requestId      String?
+  ipAddress      String?
+  userAgent      String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+  actor          User?     @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  targetUser     User?     @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  @@index([action, resource, createdAt])
+  @@index([actorId, createdAt])
 }

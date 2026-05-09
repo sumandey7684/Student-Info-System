@@ -8,6 +8,8 @@ const links = [
   { href: '/dashboard/students', label: 'Students' },
   { href: '/dashboard/teachers', label: 'Teachers' },
   { href: '/dashboard/finance', label: 'Finance' },
+  { href: '/dashboard/analytics', label: 'Analytics' },
+  { href: '/dashboard/audit-logs', label: 'Audit Logs' },
 ];
 
 export function Sidebar() {
