@@ -1,17 +1,82 @@
-import { Sidebar } from '@/components/layout/sidebar';
+'use client';
 
-export default function TeachersPage() {
+import { GraduationCap, CalendarClock, NotebookPen } from 'lucide-react';
+import { routes } from '@/lib/routes';
+import {
+  PageContainer,
+  PageTransition,
+  StickyDashboardHeader,
+} from '@/components/design-system/page-shell';
+import { KpiStatCard } from '@/components/dashboard/kpi-stat';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { OperationalActivityRadar } from '@/features/dashboard/activity-feed';
+
+export default function TeachersOverviewPage() {
   return (
-    <div className="flex min-h-screen">
-      <Sidebar />
-      <main className="flex-1 p-6">
-        <h1 className="mb-4 text-2xl font-bold">Teacher Operations</h1>
-        <section className="rounded-xl border border-slate-200 p-4 dark:border-slate-800">
-          <p className="text-sm text-slate-600 dark:text-slate-300">
-            Manage attendance marking, grade submissions, assignments, and timetable coordination.
-          </p>
-        </section>
-      </main>
-    </div>
+    <>
+      <StickyDashboardHeader
+        breadcrumbs={[
+          { label: 'Operations', href: routes.dashboard.root },
+          { label: 'Teaching ops', href: routes.dashboard.teachers },
+        ]}
+        title="Instructional nucleus"
+        description="Coordinate attendance integrity, formative cadence, and operational cadence clarity."
+        actions={<Badge variant="accent">Workload balanced</Badge>}
+      />
+      <PageTransition>
+        <PageContainer className="space-y-12">
+          <section className="grid gap-xl md:grid-cols-3">
+            <KpiStatCard
+              label="Teaching hours this week"
+              value="2,148"
+              trend={{ dir: 'up', label: '+6%' }}
+              icon={GraduationCap}
+            />
+            <KpiStatCard
+              label="Timetabled coverage"
+              value="94.9%"
+              trend={{ dir: 'up', label: 'Room conflicts ↓42%' }}
+              icon={CalendarClock}
+            />
+            <KpiStatCard
+              label="Assignments reviewed"
+              value="682"
+              subtitle="Average turnaround 06h · 14m"
+              trend={{ dir: 'up', label: 'SLAs met' }}
+              icon={NotebookPen}
+            />
+          </section>
+          <Separator />
+          <Card className="border-border shadow-md">
+            <CardHeader>
+              <CardTitle>Operational feed</CardTitle>
+              <CardDescription>
+                Feeds remain synthetic pending backend realtime dispatch.
+              </CardDescription>
+            </CardHeader>
+            <div className="px-12 pb-12 pt-8">
+              <OperationalActivityRadar
+                rows={[
+                  {
+                    id: 'tch-01',
+                    title: 'Duty roster',
+                    subtitle: 'Morning gate coverage locked with biometric confirmation.',
+                    importance: 'medium',
+                  },
+                  {
+                    id: 'tch-02',
+                    title: 'Observatory pass',
+                    subtitle: 'Coach rotation ensures consistent observational fidelity.',
+                    importance: 'low',
+                  },
+                ]}
+              />
+            </div>
+          </Card>
+        </PageContainer>
+      </PageTransition>
+    </>
   );
 }

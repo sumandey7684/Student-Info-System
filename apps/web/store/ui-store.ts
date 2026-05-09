@@ -1,17 +1,17 @@
 import { create } from 'zustand';
 
-type Role = 'ADMIN' | 'TEACHER' | 'STUDENT' | 'PARENT';
+export type UiRole = 'ADMIN' | 'TEACHER' | 'STUDENT' | 'PARENT';
 
 type UiState = {
-  theme: 'light' | 'dark';
-  role: Role;
-  setTheme: (theme: UiState['theme']) => void;
-  setRole: (role: Role) => void;
+  role: UiRole;
+  commandPaletteOpen: boolean;
+  setRole: (role: UiRole) => void;
+  setCommandPaletteOpen: (open: boolean) => void;
 };
 
 export const useUiStore = create<UiState>((set) => ({
-  theme: 'light',
   role: 'ADMIN',
-  setTheme: (theme) => set({ theme }),
+  commandPaletteOpen: false,
   setRole: (role) => set({ role }),
+  setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
 }));

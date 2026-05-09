@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { toast } from 'sonner';
 import { useAuthStore } from '@/store/auth-store';
 
 function getCookie(name: string) {
@@ -29,7 +30,9 @@ let refreshing: Promise<string | null> | null = null;
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
-    const originalRequest = error.config as (typeof error.config & { _retry?: boolean }) | undefined;
+    const originalRequest = error.config as
+      | (typeof error.config & { _retry?: boolean })
+      | undefined;
     if (error.response?.status === 401 && !originalRequest?._retry) {
       originalRequest._retry = true;
       if (!refreshing) {
@@ -37,11 +40,13 @@ apiClient.interceptors.response.use(
           .post('/auth/refresh', {})
           .then((res) => {
             const token = res.data.data?.accessToken ?? res.data.accessToken ?? null;
-            if (token) useAuthStore.getState().setSession(token, useAuthStore.getState().role ?? 'ADMIN');
+            if (token)
+              useAuthStore.getState().setSession(token, useAuthStore.getState().role ?? 'ADMIN');
             return token;
           })
           .catch(() => {
             useAuthStore.getState().clearSession();
+            toast.error('Session expired. Please authenticate again.', { duration: 5_000 });
             return null;
           })
           .finally(() => {

@@ -1,9 +1,36 @@
 'use client';
 
-export default function DashboardError() {
+import Link from 'next/link';
+import { ErrorState } from '@/components/design-system/error-state';
+import { routes } from '@/lib/routes';
+import { PageContainer } from '@/components/design-system/page-shell';
+
+export default function DashboardError({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
   return (
-    <div className="p-6 text-sm text-red-600 dark:text-red-400">
-      Dashboard request failed. Try refreshing the page.
-    </div>
+    <PageContainer className="py-page xl:pb-page">
+      <ErrorState
+        title="Dashboard surface degraded"
+        description={error.message ?? 'Boundary captured an unexpected anomaly.'}
+        retry={reset}
+      />
+      <Link
+        href={routes.dashboard.root}
+        className="mt-24 block font-semibold text-accent underline-offset-[0.5rem]"
+        prefetch
+      >
+        Return Overview
+      </Link>
+      {error.digest ? (
+        <span className="mt-24 block font-mono text-caption text-muted-foreground">
+          Fingerprint {error.digest}
+        </span>
+      ) : null}
+    </PageContainer>
   );
 }
