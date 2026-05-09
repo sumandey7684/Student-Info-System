@@ -199,3 +199,15 @@ Indexes/constraints included:
 - Set `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `COOKIE_SECRET`, `STRIPE_WEBHOOK_SECRET` in production.
 - Enforce HTTPS and secure cookies at reverse proxy/load balancer.
 - Replace local/signed-upload mock URL with S3 pre-signed implementation in production media pipeline.
+
+## Phase 2.1 Hardening (Current)
+
+- CSRF middleware + secure refresh cookie auth flow
+- Helmet + CSP + payload sanitization middleware
+- Redis lockout and brute-force throttling on auth
+- Refresh token reuse detection + revoke-all-sessions support
+- Stripe SDK integration with webhook signature verification and refund workflow
+- S3/local provider abstraction for signed upload URLs
+- Queue hardening with dead-letter queue and dedicated worker entrypoint
+- Health/readiness probes and Prometheus metrics endpoint
+- Multi-stage non-root Docker runtime + compose health checks

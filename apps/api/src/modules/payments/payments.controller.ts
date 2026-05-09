@@ -1,14 +1,20 @@
-import { Body, Controller, Get, Headers, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Post, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Request } from 'express';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PaymentsService } from './payments.service';
+import { StripeService } from './stripe.service';
+import { TracedRequest } from '../../common/middleware/request-trace.middleware';
 
 @ApiTags('payments')
 @Controller('payments')
 export class PaymentsController {
-  constructor(private readonly paymentsService: PaymentsService) {}
+  constructor(
+    private readonly paymentsService: PaymentsService,
+    private readonly stripeService: StripeService,
+  ) {}
 
   @Post('intent')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
@@ -20,13 +26,20 @@ export class PaymentsController {
 
   @Post('webhook')
   webhook(
+    @Req() req: Request & { rawBody?: Buffer },
     @Headers('stripe-signature') stripeSignature: string,
-    @Body() dto: { stripeIntentId: string; status: 'SUCCEEDED' | 'FAILED' | 'REFUNDED' },
   ) {
-    if (!stripeSignature) {
-      throw new Error('Missing stripe signature header');
-    }
-    return this.paymentsService.handleWebhook(dto);
+    const event = this.stripeService.constructWebhookEvent(req.rawBody ?? Buffer.from(''), stripeSignature);
+    return this.paymentsService.handleWebhookEvent(event as never);
+  }
+
+  @Post('refund')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @ApiBearerAuth()
+  @RequirePermissions('payments:update')
+  refund(@Req() req: TracedRequest, @Body() dto: { paymentIntentId: string }) {
+    const actor = req.user as { id: string };
+    return this.paymentsService.refund(dto.paymentIntentId, actor.id);
   }
 
   @Get('summary')

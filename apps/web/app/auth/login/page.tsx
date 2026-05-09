@@ -22,6 +22,7 @@ export default function LoginPage() {
   });
 
   const onSubmit = async (values: FormValues) => {
+    await apiClient.get('/auth/csrf-token');
     const response = await apiClient.post('/auth/login', values);
     const accessToken = response.data.data?.accessToken ?? response.data.accessToken;
     setSession(accessToken, 'ADMIN');

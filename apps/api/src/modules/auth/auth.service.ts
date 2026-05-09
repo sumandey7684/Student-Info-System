@@ -25,6 +25,9 @@ import { ERROR_CODES } from '../../common/constants/error-codes';
 
 @Injectable()
 export class AuthService {
+  private readonly refreshTtlMs = 7 * 24 * 60 * 60 * 1000;
+  private readonly maxLoginAttempts = 5;
+
   constructor(
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
@@ -57,12 +60,22 @@ export class AuthService {
 
     return {
       message: 'User registered',
+      // In production this token should be delivered over email only.
       emailVerificationToken: token,
       user: { id: user.id, email: user.email, fullName: user.fullName },
     };
   }
 
-  async login(dto: LoginDto) {
+  async login(
+    dto: LoginDto,
+    context?: { ipAddress?: string; userAgent?: string | string[]; deviceId?: string },
+  ) {
+    const lockKey = `auth:lock:${dto.email}`;
+    const blocked = await this.redis.get<{ until: number }>(lockKey);
+    if (blocked && blocked.until > Date.now()) {
+      throw new UnauthorizedException('Account temporarily locked due to failed attempts');
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
       include: {
@@ -71,10 +84,17 @@ export class AuthService {
         },
       },
     });
-    if (!user) throw new UnauthorizedException(ERROR_CODES.AUTH_INVALID_CREDENTIALS);
+    if (!user) {
+      await this.trackFailedAttempt(dto.email);
+      throw new UnauthorizedException(ERROR_CODES.AUTH_INVALID_CREDENTIALS);
+    }
 
     const valid = await argon2.verify(user.passwordHash, dto.password);
-    if (!valid) throw new UnauthorizedException(ERROR_CODES.AUTH_INVALID_CREDENTIALS);
+    if (!valid) {
+      await this.trackFailedAttempt(dto.email);
+      throw new UnauthorizedException(ERROR_CODES.AUTH_INVALID_CREDENTIALS);
+    }
+    await this.redis.del(`auth:attempts:${dto.email}`);
 
     if (user.isMfaEnabled) {
       if (!dto.totpCode && !dto.backupCode) {
@@ -100,12 +120,16 @@ export class AuthService {
       data: {
         userId: user.id,
         refreshTokenHash,
-        deviceId: dto.deviceId ?? crypto.randomUUID(),
-        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        deviceId: context?.deviceId ?? dto.deviceId ?? crypto.randomUUID(),
+        userAgent: Array.isArray(context?.userAgent)
+          ? context?.userAgent.join(';')
+          : context?.userAgent,
+        ipAddress: context?.ipAddress,
+        expiresAt: new Date(Date.now() + this.refreshTtlMs),
       },
     });
 
-    await this.redis.set(`session:${session.id}`, { userId: user.id }, 7 * 24 * 60 * 60);
+    await this.redis.set(`session:${session.id}`, { userId: user.id }, Math.floor(this.refreshTtlMs / 1000));
     await this.auditLog.create({
       actorId: user.id,
       action: 'AUTH_LOGIN',
@@ -122,8 +146,9 @@ export class AuthService {
     };
   }
 
-  async refreshTokens(dto: RefreshTokenDto) {
-    const [sessionId, rawToken] = dto.refreshToken.split('.');
+  async refreshTokens(dto: RefreshTokenDto, ipAddress?: string) {
+    const providedToken = dto.refreshToken ?? '';
+    const [sessionId, rawToken] = providedToken.split('.');
     if (!sessionId || !rawToken) throw new UnauthorizedException(ERROR_CODES.AUTH_TOKEN_INVALID);
 
     const session = await this.prisma.session.findUnique({ where: { id: sessionId } });
@@ -132,7 +157,16 @@ export class AuthService {
     }
 
     const tokenMatches = await argon2.verify(session.refreshTokenHash, rawToken);
-    if (!tokenMatches) throw new UnauthorizedException(ERROR_CODES.AUTH_TOKEN_INVALID);
+    if (!tokenMatches) {
+      // Reuse detection: revoke all sessions for this user if stale token appears.
+      await this.revokeAllSessions(session.userId);
+      throw new UnauthorizedException(ERROR_CODES.AUTH_TOKEN_INVALID);
+    }
+
+    if (ipAddress && session.ipAddress && session.ipAddress !== ipAddress) {
+      await this.revokeAllSessions(session.userId);
+      throw new UnauthorizedException('Session anomaly detected');
+    }
 
     const user = await this.prisma.user.findUnique({
       where: { id: session.userId },
@@ -141,11 +175,23 @@ export class AuthService {
     if (!user) throw new UnauthorizedException(ERROR_CODES.AUTH_TOKEN_INVALID);
 
     const newRawToken = crypto.randomBytes(48).toString('hex');
-    await this.prisma.session.update({
-      where: { id: session.id },
-      data: {
-        refreshTokenHash: await argon2.hash(newRawToken),
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.session.update({
+        where: { id: session.id },
+        data: {
+          refreshTokenHash: await argon2.hash(newRawToken),
+          ipAddress: ipAddress ?? session.ipAddress,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          action: 'AUTH_REFRESH',
+          resource: 'AUTH',
+          resourceId: session.id,
+          status: 'SUCCESS',
+        },
+      });
     });
 
     const accessToken = await this.jwtService.signAsync({
@@ -168,6 +214,19 @@ export class AuthService {
     });
     await this.redis.del(`session:${sessionId}`);
     return { revoked: true };
+  }
+
+  async revokeAllSessions(userId: string) {
+    const sessions = await this.prisma.session.findMany({
+      where: { userId, revokedAt: null },
+      select: { id: true },
+    });
+    await this.prisma.session.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    await Promise.all(sessions.map((session) => this.redis.del(`session:${session.id}`)));
+    return { revokedAll: true };
   }
 
   async forgotPassword(dto: ForgotPasswordDto) {
@@ -201,16 +260,26 @@ export class AuthService {
     ).find(Boolean);
 
     if (!tokenRecord) throw new UnauthorizedException(ERROR_CODES.AUTH_TOKEN_INVALID);
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: tokenRecord.userId } });
+    const history = (await this.redis.get<string[]>(`password-history:${user.id}`)) ?? [];
+    const isReused = await Promise.all(history.map((item) => argon2.verify(item, dto.newPassword))).then(
+      (results) => results.some(Boolean),
+    );
+    if (isReused || (await argon2.verify(user.passwordHash, dto.newPassword))) {
+      throw new BadRequestException('Password was used recently');
+    }
+    const nextHash = await argon2.hash(dto.newPassword);
     await this.prisma.$transaction([
       this.prisma.user.update({
         where: { id: tokenRecord.userId },
-        data: { passwordHash: await argon2.hash(dto.newPassword) },
+        data: { passwordHash: nextHash },
       }),
       this.prisma.authToken.update({
         where: { id: tokenRecord.id },
         data: { consumedAt: new Date() },
       }),
     ]);
+    await this.redis.set(`password-history:${user.id}`, [user.passwordHash, ...history].slice(0, 5), 90 * 24 * 60 * 60);
     return { message: 'Password updated' };
   }
 
@@ -289,5 +358,15 @@ export class AuthService {
       token: totpCode,
       window: 1,
     });
+  }
+
+  private async trackFailedAttempt(email: string) {
+    const key = `auth:attempts:${email}`;
+    const current = (await this.redis.get<number>(key)) ?? 0;
+    const next = current + 1;
+    await this.redis.set(key, next, 10 * 60);
+    if (next >= this.maxLoginAttempts) {
+      await this.redis.set(`auth:lock:${email}`, { until: Date.now() + 15 * 60 * 1000 }, 15 * 60);
+    }
   }
 }
