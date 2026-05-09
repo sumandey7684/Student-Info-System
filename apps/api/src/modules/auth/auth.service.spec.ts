@@ -1,9 +1,9 @@
 import { Test } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
 import { AuthService } from './auth.service';
-import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { AuthRepository } from '../../repositories/auth.repository';
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -17,12 +17,28 @@ describe('AuthService', () => {
           useValue: { signAsync: jest.fn().mockResolvedValue('token') },
         },
         {
-          provide: PrismaService,
+          provide: AuthRepository,
           useValue: {
-            user: { findUnique: jest.fn(), create: jest.fn() },
-            authToken: { create: jest.fn(), findMany: jest.fn(), update: jest.fn() },
-            session: { create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
-            $transaction: jest.fn(),
+            findUniqueByEmail: jest.fn(),
+            createUserBasic: jest.fn(),
+            createAuthToken: jest.fn(),
+            findUserForLogin: jest.fn(),
+            createSession: jest.fn(),
+            findSession: jest.fn(),
+            findUserWithRolesFlat: jest.fn(),
+            rotateSessionAndAudit: jest.fn(),
+            revokeSession: jest.fn(),
+            findActiveSessionsForUser: jest.fn(),
+            revokeAllActiveSessions: jest.fn(),
+            findPasswordResetTokens: jest.fn(),
+            findUserRequired: jest.fn(),
+            resetPasswordConsumeToken: jest.fn(),
+            findEmailVerifyTokens: jest.fn(),
+            consumeEmailVerify: jest.fn(),
+            updateMfaPendingSecret: jest.fn(),
+            enableMfa: jest.fn(),
+            disableMfa: jest.fn(),
+            findUserSecrets: jest.fn(),
           },
         },
         { provide: RedisService, useValue: { set: jest.fn(), del: jest.fn(), get: jest.fn() } },

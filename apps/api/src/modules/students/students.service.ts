@@ -1,36 +1,34 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import { QueryDto } from '../../common/dto/query.dto';
-import { buildPagination } from '../../common/utils/query.util';
 import { CreateStudentDto, UpdateStudentDto } from './students.dto';
 import * as argon2 from 'argon2';
+import { StudentsRepository } from '../../repositories/students.repository';
 
 @Injectable()
 export class StudentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly studentsRepo: StudentsRepository) {}
 
   async create(dto: CreateStudentDto) {
-    return this.prisma.user.create({
-      data: {
-        email: dto.email,
-        fullName: dto.fullName,
-        passwordHash: await argon2.hash('TempPass#123'),
-        student: {
-          create: {
-            registration: dto.registration,
-            gradeLevel: dto.gradeLevel,
-            guardianNote: dto.guardianNote,
-          },
+    const passwordHash = await argon2.hash('TempPass#123');
+    return this.studentsRepo.createStudentUser({
+      email: dto.email,
+      fullName: dto.fullName,
+      passwordHash,
+      student: {
+        create: {
+          registration: dto.registration,
+          gradeLevel: dto.gradeLevel,
+          guardianNote: dto.guardianNote,
         },
       },
-      include: { student: true },
     });
   }
 
   async findAll(query: QueryDto) {
-    const { skip, take } = buildPagination(query);
-    const where = {
+    const where: Prisma.UserWhereInput = {
       deletedAt: null,
+      student: { isNot: null },
       ...(query.search
         ? {
             OR: [
@@ -39,38 +37,19 @@ export class StudentsService {
             ],
           }
         : {}),
-      student: { isNot: null },
     };
-    const [items, total] = await Promise.all([
-      this.prisma.user.findMany({
-        where,
-        include: { student: true },
-        skip,
-        take,
-        orderBy: { createdAt: query.order },
-      }),
-      this.prisma.user.count({ where }),
-    ]);
+    const [items, total] = await this.studentsRepo.paginatedStudentUsers(query, where);
     return { items, total, page: query.page, limit: query.limit };
   }
 
   async update(studentUserId: string, dto: UpdateStudentDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: studentUserId },
-      include: { student: true },
-    });
+    const user = await this.studentsRepo.findUserWithStudent(studentUserId);
     if (!user?.student) throw new NotFoundException('Student not found');
-    return this.prisma.student.update({
-      where: { id: user.student.id },
-      data: dto,
-    });
+    return this.studentsRepo.updateStudentRow(user.student.id, dto);
   }
 
   async softDelete(studentUserId: string) {
-    await this.prisma.user.update({
-      where: { id: studentUserId },
-      data: { deletedAt: new Date() },
-    });
+    await this.studentsRepo.softDeleteUser(studentUserId);
     return { deleted: true };
   }
 }

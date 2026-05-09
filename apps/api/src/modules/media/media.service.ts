@@ -1,19 +1,20 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
 import { LocalStorageProvider } from './providers/local-storage.provider';
 import { S3StorageProvider } from './providers/s3-storage.provider';
 import { StorageProvider } from './providers/storage-provider.interface';
+import { MediaRepository } from '../../repositories/media.repository';
 
 @Injectable()
 export class MediaService {
   private readonly provider: StorageProvider;
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly mediaRepo: MediaRepository,
     localStorageProvider: LocalStorageProvider,
     s3StorageProvider: S3StorageProvider,
   ) {
-    this.provider = (process.env.STORAGE_DRIVER ?? 'local') === 's3' ? s3StorageProvider : localStorageProvider;
+    this.provider =
+      (process.env.STORAGE_DRIVER ?? 'local') === 's3' ? s3StorageProvider : localStorageProvider;
   }
 
   async createSignedUpload(ownerId: string, filename: string, mimeType: string, size: number) {
@@ -33,15 +34,13 @@ export class MediaService {
     checksum?: string;
     storage?: string;
   }) {
-    return this.prisma.fileAsset.create({
-      data: {
-        ownerId: input.ownerId,
-        storage: input.storage ?? process.env.STORAGE_DRIVER ?? 'local',
-        path: input.key,
-        mimeType: input.mimeType,
-        size: input.size,
-        checksum: input.checksum,
-      },
+    return this.mediaRepo.createAsset({
+      ownerId: input.ownerId,
+      storage: input.storage ?? process.env.STORAGE_DRIVER ?? 'local',
+      path: input.key,
+      mimeType: input.mimeType,
+      size: input.size,
+      checksum: input.checksum,
     });
   }
 }

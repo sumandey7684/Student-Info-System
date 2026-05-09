@@ -25,12 +25,14 @@ import { MediaModule } from './modules/media/media.module';
 import { HealthModule } from './modules/health/health.module';
 import { MetricsModule } from './modules/metrics/metrics.module';
 import { validateEnv } from './config/env.validation';
+import { RepositoriesModule } from './repositories/repositories.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
     PrismaModule,
+    RepositoriesModule,
     RedisModule,
     CommonModule,
     AuditLogModule,
@@ -54,6 +56,8 @@ import { validateEnv } from './config/env.validation';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(RequestTraceMiddleware, PayloadSanitizationMiddleware, CsrfMiddleware).forRoutes('*');
+    consumer
+      .apply(RequestTraceMiddleware, PayloadSanitizationMiddleware, CsrfMiddleware)
+      .forRoutes('*');
   }
 }

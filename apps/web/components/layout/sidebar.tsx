@@ -1,5 +1,6 @@
 'use client';
 
+import type { Route } from 'next';
 import Link from 'next/link';
 import { useUiStore } from '@/store/ui-store';
 import { useAuthStore } from '@/store/auth-store';
@@ -29,7 +30,11 @@ export function Sidebar() {
       <h2 className="mb-4 text-lg font-semibold">SIS - {authRole}</h2>
       <nav className="space-y-2">
         {links.map((item) => (
-          <Link key={item.href} href={item.href} className="block rounded p-2 hover:bg-slate-200 dark:hover:bg-slate-800">
+          <Link
+            key={item.href}
+            href={item.href as Route}
+            className="block rounded p-2 hover:bg-slate-200 dark:hover:bg-slate-800"
+          >
             {item.label}
           </Link>
         ))}

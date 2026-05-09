@@ -1,15 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { DepartmentsRepository } from '../../repositories/departments.repository';
 
 @Injectable()
 export class DepartmentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly departmentsRepo: DepartmentsRepository) {}
 
   create(data: { name: string; code: string }) {
-    return this.prisma.department.create({ data });
+    return this.departmentsRepo.create(data);
   }
 
   list() {
-    return this.prisma.department.findMany({ where: { deletedAt: null } });
+    return this.departmentsRepo.findAllActive();
   }
 }

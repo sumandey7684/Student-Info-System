@@ -1,11 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { AnalyticsRepository } from '../../repositories/analytics.repository';
 
 @Injectable()
 export class AnalyticsService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly analyticsRepo: AnalyticsRepository,
     private readonly redis: RedisService,
   ) {}
 
@@ -14,16 +14,8 @@ export class AnalyticsService {
     const cached = await this.redis.get<Record<string, unknown>>(cacheKey);
     if (cached) return cached;
 
-    const [students, teachers, attendancePresent, attendanceTotal, revenue] = await Promise.all([
-      this.prisma.student.count({ where: { deletedAt: null } }),
-      this.prisma.teacher.count({ where: { deletedAt: null } }),
-      this.prisma.attendance.count({ where: { present: true } }),
-      this.prisma.attendance.count(),
-      this.prisma.payment.aggregate({
-        where: { status: 'SUCCEEDED' },
-        _sum: { amount: true },
-      }),
-    ]);
+    const [students, teachers, attendancePresent, attendanceTotal, revenue] =
+      await this.analyticsRepo.dashboardSummaryTuples();
 
     const data = {
       students,

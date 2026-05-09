@@ -1,11 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../modules/prisma/prisma.service';
 import { RedisService } from '../../modules/redis/redis.service';
+import { AuthRepository } from '../../repositories/auth.repository';
 
 @Injectable()
 export class PermissionCacheService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly authRepository: AuthRepository,
     private readonly redis: RedisService,
   ) {}
 
@@ -14,20 +14,13 @@ export class PermissionCacheService {
     const cached = await this.redis.get<{ roles: string[]; permissions: string[] }>(cacheKey);
     if (cached) return cached;
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        roles: {
-          include: {
-            role: { include: { permissions: { include: { permission: true } } } },
-          },
-        },
-      },
-    });
+    const user = await this.authRepository.findUserAuthorizationGraph(userId);
     if (!user) return { roles: [], permissions: [] };
     const roles = user.roles.map((entry) => entry.role.name);
     const permissions = user.roles.flatMap((entry) =>
-      entry.role.permissions.map((mapping) => `${mapping.permission.resource}:${mapping.permission.action}`),
+      entry.role.permissions.map(
+        (mapping) => `${mapping.permission.resource}:${mapping.permission.action}`,
+      ),
     );
     const payload = { roles, permissions: [...new Set(permissions)] };
     await this.redis.set(cacheKey, payload, 300);

@@ -2,19 +2,21 @@ import { Injectable } from '@nestjs/common';
 import { PaymentStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { AuditLogService } from '../audit-log/audit-log.service';
-import { PrismaService } from '../prisma/prisma.service';
 import { QueueService } from '../queue/queue.service';
-import { PaymentsRepository } from './repositories/payments.repository';
+import { PaymentsRepository } from '../../repositories/payments.repository';
+import { AuditLogsRepository } from '../../repositories/audit-logs.repository';
+import { TransactionManager } from '../../repositories/transaction.manager';
 import { StripeService } from './stripe.service';
 
 @Injectable()
 export class PaymentsService {
   constructor(
-    private readonly prisma: PrismaService,
     private readonly paymentsRepository: PaymentsRepository,
     private readonly stripeService: StripeService,
     private readonly queueService: QueueService,
     private readonly auditLog: AuditLogService,
+    private readonly auditLogsRepository: AuditLogsRepository,
+    private readonly transactionManager: TransactionManager,
   ) {}
 
   async createPaymentIntent(data: { userId: string; amount: number; currency?: string }) {
@@ -33,38 +35,40 @@ export class PaymentsService {
       idempotencyKey: randomUUID(),
     });
 
-    await this.prisma.payment.update({
-      where: { id: payment.id },
-      data: { stripeIntentId: intent.id, stripePaymentId: intent.latest_charge?.toString() },
-    });
+    await this.paymentsRepository.attachStripeIntent(
+      payment.id,
+      intent.id,
+      intent.latest_charge?.toString(),
+    );
     return { paymentId: payment.id, clientSecret: intent.client_secret };
   }
 
   async handleWebhookEvent(event: { id: string; type: string; data: { object: { id: string } } }) {
     const replayKey = `stripe:webhook:${event.id}`;
-    const alreadyProcessed = await this.prisma.auditLog.findFirst({
-      where: { action: 'PAYMENT_WEBHOOK', resourceId: event.id },
-      select: { id: true },
-    });
+    const alreadyProcessed = await this.auditLogsRepository.findStripeWebhookReplay(
+      'PAYMENT_WEBHOOK',
+      event.id,
+    );
     if (alreadyProcessed) return { skipped: true };
 
     const stripeIntentId = event.data.object.id;
-    let status = PaymentStatus.PENDING;
+    let status: PaymentStatus = PaymentStatus.PENDING;
     if (event.type === 'payment_intent.succeeded') status = PaymentStatus.SUCCEEDED;
     if (event.type === 'payment_intent.payment_failed') status = PaymentStatus.FAILED;
     if (event.type === 'charge.refunded') status = PaymentStatus.REFUNDED;
 
-    await this.prisma.$transaction(async (tx) => {
+    await this.transactionManager.run(async (tx) => {
       await this.paymentsRepository.updateByIntent(stripeIntentId, status, tx);
-      await tx.auditLog.create({
-        data: {
+      await this.auditLogsRepository.create(
+        {
           action: 'PAYMENT_WEBHOOK',
           resource: 'PAYMENT',
           resourceId: event.id,
           status: 'SUCCESS',
           metadata: { type: event.type, stripeIntentId },
         },
-      });
+        tx,
+      );
     });
 
     await this.queueService.enqueueNotification('payment-status-changed', {

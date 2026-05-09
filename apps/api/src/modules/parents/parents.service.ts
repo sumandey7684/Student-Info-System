@@ -1,27 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import * as argon2 from 'argon2';
-import { PrismaService } from '../prisma/prisma.service';
+import { QueryDto } from '../../common/dto/query.dto';
+import { ParentsRepository } from '../../repositories/parents.repository';
 
 @Injectable()
 export class ParentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly parentsRepo: ParentsRepository) {}
 
   async create(dto: { fullName: string; email: string }) {
-    return this.prisma.user.create({
-      data: {
-        fullName: dto.fullName,
-        email: dto.email,
-        passwordHash: await argon2.hash('TempPass#123'),
-        parent: { create: {} },
-      },
-      include: { parent: true },
-    });
+    const passwordHash = await argon2.hash('TempPass#123');
+    return this.parentsRepo.createParentUser(passwordHash, dto);
   }
 
-  list() {
-    return this.prisma.user.findMany({
-      where: { deletedAt: null, parent: { isNot: null } },
-      include: { parent: true },
-    });
+  async list(query: QueryDto) {
+    const [items, total] = await this.parentsRepo.paginatedParents(query);
+    return { items, total, page: query.page, limit: query.limit };
   }
 }

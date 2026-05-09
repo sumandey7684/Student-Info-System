@@ -1,13 +1,13 @@
 import { Controller, Get } from '@nestjs/common';
 import { HealthCheck, HealthCheckService, MemoryHealthIndicator } from '@nestjs/terminus';
-import { PrismaService } from '../prisma/prisma.service';
+import { DatabaseRepository } from '../../repositories/database.repository';
 
 @Controller('health')
 export class HealthController {
   constructor(
     private readonly health: HealthCheckService,
     private readonly memory: MemoryHealthIndicator,
-    private readonly prisma: PrismaService,
+    private readonly databaseRepository: DatabaseRepository,
   ) {}
 
   @Get('live')
@@ -21,7 +21,7 @@ export class HealthController {
     return this.health.check([
       async () => this.memory.checkHeap('memory_heap', 300 * 1024 * 1024),
       async () => {
-        await this.prisma.$queryRaw`SELECT 1`;
+        await this.databaseRepository.ping();
         return { database: { status: 'up' } };
       },
     ]);

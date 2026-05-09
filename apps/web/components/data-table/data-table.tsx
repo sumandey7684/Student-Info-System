@@ -1,14 +1,11 @@
 'use client';
 
-import {
-  ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from '@tanstack/react-table';
+import { ColumnDef, flexRender, getCoreRowModel, useReactTable } from '@tanstack/react-table';
 
+/** Second generic is per-column TValue; accessors often infer `string` which is incompatible with `unknown`. */
 type Props<T> = {
-  columns: ColumnDef<T>[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ColumnDef TValue union is app-specific per table.
+  columns: ColumnDef<T, any>[];
   data: T[];
 };
 

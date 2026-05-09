@@ -8,7 +8,9 @@ export class QueueService implements OnModuleDestroy {
     port: Number(process.env.REDIS_PORT ?? 6379),
   };
   private readonly emailQueue = new Queue('email-queue', { connection: this.connection });
-  private readonly deadLetterQueue = new Queue('dead-letter-queue', { connection: this.connection });
+  private readonly deadLetterQueue = new Queue('dead-letter-queue', {
+    connection: this.connection,
+  });
   private readonly notificationQueue = new Queue('notification-queue', {
     connection: this.connection,
   });
@@ -43,7 +45,6 @@ export class QueueService implements OnModuleDestroy {
       attempts: 5,
       removeOnComplete: 200,
       removeOnFail: 1000,
-      timeout: 30_000,
       backoff: { type: 'exponential', delay: 1_000 },
       ...options,
     });
@@ -54,7 +55,6 @@ export class QueueService implements OnModuleDestroy {
       attempts: 3,
       removeOnComplete: 200,
       removeOnFail: 1000,
-      timeout: 30_000,
       backoff: { type: 'fixed', delay: 500 },
       ...options,
     });

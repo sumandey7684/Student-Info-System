@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ParentsService } from './parents.service';
+import { QueryDto } from '../../common/dto/query.dto';
 
 @ApiTags('parents')
 @Controller('parents')
@@ -14,8 +15,8 @@ export class ParentsController {
 
   @Get()
   @RequirePermissions('parents:read')
-  list() {
-    return this.parentsService.list();
+  list(@Query() query: QueryDto) {
+    return this.parentsService.list(query);
   }
 
   @Post()

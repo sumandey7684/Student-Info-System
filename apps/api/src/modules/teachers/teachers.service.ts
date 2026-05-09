@@ -1,32 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { QueryDto } from '../../common/dto/query.dto';
-import { buildPagination } from '../../common/utils/query.util';
-import { PrismaService } from '../prisma/prisma.service';
+import { TeachersRepository } from '../../repositories/teachers.repository';
 
 @Injectable()
 export class TeachersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly teachersRepo: TeachersRepository) {}
 
   async create(dto: { fullName: string; email: string; departmentId?: string }) {
-    return this.prisma.user.create({
-      data: {
-        fullName: dto.fullName,
-        email: dto.email,
-        passwordHash: await argon2.hash('TempPass#123'),
-        teacher: { create: { departmentId: dto.departmentId } },
-      },
-      include: { teacher: true },
-    });
+    const passwordHash = await argon2.hash('TempPass#123');
+    return this.teachersRepo.createTeacherUser(passwordHash, dto);
   }
 
-  findAll(query: QueryDto) {
-    const { skip, take } = buildPagination(query);
-    return this.prisma.user.findMany({
-      where: { deletedAt: null, teacher: { isNot: null } },
-      include: { teacher: true },
-      skip,
-      take,
-    });
+  async findAll(query: QueryDto) {
+    const [items, total] = await this.teachersRepo.paginatedTeachers(query);
+    return { items, total, page: query.page, limit: query.limit };
   }
 }

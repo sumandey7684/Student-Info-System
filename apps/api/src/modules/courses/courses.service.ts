@@ -1,18 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { CoursesRepository } from '../../repositories/courses.repository';
 
 @Injectable()
 export class CoursesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly coursesRepo: CoursesRepository) {}
 
   create(data: { name: string; code: string; subjectId?: string; teacherId?: string }) {
-    return this.prisma.course.create({ data });
+    return this.coursesRepo.create(data);
   }
 
   list() {
-    return this.prisma.course.findMany({
-      where: { deletedAt: null },
-      include: { subject: true, teacher: { include: { user: true } } },
-    });
+    return this.coursesRepo.findAllActive();
   }
 }

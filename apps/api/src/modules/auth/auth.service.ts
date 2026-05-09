@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import * as crypto from 'crypto';
@@ -18,10 +14,10 @@ import {
   SetupMfaDto,
   VerifyEmailDto,
 } from './auth.dto';
-import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { ERROR_CODES } from '../../common/constants/error-codes';
+import { AuthRepository } from '../../repositories/auth.repository';
 
 @Injectable()
 export class AuthService {
@@ -30,37 +26,32 @@ export class AuthService {
 
   constructor(
     private readonly jwtService: JwtService,
-    private readonly prisma: PrismaService,
+    private readonly authRepo: AuthRepository,
     private readonly redis: RedisService,
     private readonly auditLog: AuditLogService,
   ) {}
 
   async register(dto: RegisterDto) {
-    const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const existing = await this.authRepo.findUniqueByEmail(dto.email);
     if (existing) throw new BadRequestException('Email already registered');
 
     const passwordHash = await argon2.hash(dto.password);
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email,
-        fullName: dto.fullName,
-        passwordHash,
-      },
+    const user = await this.authRepo.createUserBasic({
+      email: dto.email,
+      fullName: dto.fullName,
+      passwordHash,
     });
 
     const token = crypto.randomBytes(32).toString('hex');
-    await this.prisma.authToken.create({
-      data: {
-        userId: user.id,
-        tokenHash: await argon2.hash(token),
-        type: 'EMAIL_VERIFY',
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      },
+    await this.authRepo.createAuthToken({
+      userId: user.id,
+      tokenHash: await argon2.hash(token),
+      type: 'EMAIL_VERIFY',
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     });
 
     return {
       message: 'User registered',
-      // In production this token should be delivered over email only.
       emailVerificationToken: token,
       user: { id: user.id, email: user.email, fullName: user.fullName },
     };
@@ -76,14 +67,7 @@ export class AuthService {
       throw new UnauthorizedException('Account temporarily locked due to failed attempts');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-      include: {
-        roles: {
-          include: { role: { include: { permissions: { include: { permission: true } } } } },
-        },
-      },
-    });
+    const user = await this.authRepo.findUserForLogin(dto.email);
     if (!user) {
       await this.trackFailedAttempt(dto.email);
       throw new UnauthorizedException(ERROR_CODES.AUTH_INVALID_CREDENTIALS);
@@ -116,20 +100,22 @@ export class AuthService {
 
     const refreshTokenRaw = crypto.randomBytes(48).toString('hex');
     const refreshTokenHash = await argon2.hash(refreshTokenRaw);
-    const session = await this.prisma.session.create({
-      data: {
-        userId: user.id,
-        refreshTokenHash,
-        deviceId: context?.deviceId ?? dto.deviceId ?? crypto.randomUUID(),
-        userAgent: Array.isArray(context?.userAgent)
-          ? context?.userAgent.join(';')
-          : context?.userAgent,
-        ipAddress: context?.ipAddress,
-        expiresAt: new Date(Date.now() + this.refreshTtlMs),
-      },
+    const session = await this.authRepo.createSession({
+      userId: user.id,
+      refreshTokenHash,
+      deviceId: context?.deviceId ?? dto.deviceId ?? crypto.randomUUID(),
+      userAgent: Array.isArray(context?.userAgent)
+        ? context?.userAgent.join(';')
+        : context?.userAgent,
+      ipAddress: context?.ipAddress,
+      expiresAt: new Date(Date.now() + this.refreshTtlMs),
     });
 
-    await this.redis.set(`session:${session.id}`, { userId: user.id }, Math.floor(this.refreshTtlMs / 1000));
+    await this.redis.set(
+      `session:${session.id}`,
+      { userId: user.id },
+      Math.floor(this.refreshTtlMs / 1000),
+    );
     await this.auditLog.create({
       actorId: user.id,
       action: 'AUTH_LOGIN',
@@ -151,14 +137,13 @@ export class AuthService {
     const [sessionId, rawToken] = providedToken.split('.');
     if (!sessionId || !rawToken) throw new UnauthorizedException(ERROR_CODES.AUTH_TOKEN_INVALID);
 
-    const session = await this.prisma.session.findUnique({ where: { id: sessionId } });
+    const session = await this.authRepo.findSession(sessionId);
     if (!session || session.revokedAt || session.expiresAt < new Date()) {
       throw new UnauthorizedException(ERROR_CODES.AUTH_SESSION_EXPIRED);
     }
 
     const tokenMatches = await argon2.verify(session.refreshTokenHash, rawToken);
     if (!tokenMatches) {
-      // Reuse detection: revoke all sessions for this user if stale token appears.
       await this.revokeAllSessions(session.userId);
       throw new UnauthorizedException(ERROR_CODES.AUTH_TOKEN_INVALID);
     }
@@ -168,30 +153,16 @@ export class AuthService {
       throw new UnauthorizedException('Session anomaly detected');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: session.userId },
-      include: { roles: { include: { role: true } } },
-    });
+    const user = await this.authRepo.findUserWithRolesFlat(session.userId);
     if (!user) throw new UnauthorizedException(ERROR_CODES.AUTH_TOKEN_INVALID);
 
     const newRawToken = crypto.randomBytes(48).toString('hex');
-    await this.prisma.$transaction(async (tx) => {
-      await tx.session.update({
-        where: { id: session.id },
-        data: {
-          refreshTokenHash: await argon2.hash(newRawToken),
-          ipAddress: ipAddress ?? session.ipAddress,
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          actorId: user.id,
-          action: 'AUTH_REFRESH',
-          resource: 'AUTH',
-          resourceId: session.id,
-          status: 'SUCCESS',
-        },
-      });
+    await this.authRepo.rotateSessionAndAudit({
+      sessionId: session.id,
+      refreshTokenHashNext: await argon2.hash(newRawToken),
+      userId: user.id,
+      ipAddress,
+      priorIp: session.ipAddress,
     });
 
     const accessToken = await this.jwtService.signAsync({
@@ -208,38 +179,27 @@ export class AuthService {
 
   async revokeSession(refreshToken: string) {
     const [sessionId] = refreshToken.split('.');
-    await this.prisma.session.update({
-      where: { id: sessionId },
-      data: { revokedAt: new Date() },
-    });
+    await this.authRepo.revokeSession(sessionId);
     await this.redis.del(`session:${sessionId}`);
     return { revoked: true };
   }
 
   async revokeAllSessions(userId: string) {
-    const sessions = await this.prisma.session.findMany({
-      where: { userId, revokedAt: null },
-      select: { id: true },
-    });
-    await this.prisma.session.updateMany({
-      where: { userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
+    const sessions = await this.authRepo.findActiveSessionsForUser(userId);
+    await this.authRepo.revokeAllActiveSessions(userId);
     await Promise.all(sessions.map((session) => this.redis.del(`session:${session.id}`)));
     return { revokedAll: true };
   }
 
   async forgotPassword(dto: ForgotPasswordDto) {
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const user = await this.authRepo.findUniqueByEmail(dto.email);
     if (!user) return { message: 'If account exists, reset token was issued.' };
     const token = crypto.randomBytes(24).toString('hex');
-    await this.prisma.authToken.create({
-      data: {
-        userId: user.id,
-        tokenHash: await argon2.hash(token),
-        type: 'PASSWORD_RESET',
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-      },
+    await this.authRepo.createAuthToken({
+      userId: user.id,
+      tokenHash: await argon2.hash(token),
+      type: 'PASSWORD_RESET',
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     });
     return {
       message: 'Password reset requested',
@@ -248,9 +208,7 @@ export class AuthService {
   }
 
   async resetPassword(dto: ResetPasswordDto) {
-    const tokens = await this.prisma.authToken.findMany({
-      where: { type: 'PASSWORD_RESET', consumedAt: null, expiresAt: { gt: new Date() } },
-    });
+    const tokens = await this.authRepo.findPasswordResetTokens();
     const tokenRecord = (
       await Promise.all(
         tokens.map(async (token) =>
@@ -260,33 +218,30 @@ export class AuthService {
     ).find(Boolean);
 
     if (!tokenRecord) throw new UnauthorizedException(ERROR_CODES.AUTH_TOKEN_INVALID);
-    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: tokenRecord.userId } });
+    const user = await this.authRepo.findUserRequired(tokenRecord.userId);
     const history = (await this.redis.get<string[]>(`password-history:${user.id}`)) ?? [];
-    const isReused = await Promise.all(history.map((item) => argon2.verify(item, dto.newPassword))).then(
-      (results) => results.some(Boolean),
-    );
+    const isReused = await Promise.all(
+      history.map((item) => argon2.verify(item, dto.newPassword)),
+    ).then((results) => results.some(Boolean));
     if (isReused || (await argon2.verify(user.passwordHash, dto.newPassword))) {
       throw new BadRequestException('Password was used recently');
     }
     const nextHash = await argon2.hash(dto.newPassword);
-    await this.prisma.$transaction([
-      this.prisma.user.update({
-        where: { id: tokenRecord.userId },
-        data: { passwordHash: nextHash },
-      }),
-      this.prisma.authToken.update({
-        where: { id: tokenRecord.id },
-        data: { consumedAt: new Date() },
-      }),
-    ]);
-    await this.redis.set(`password-history:${user.id}`, [user.passwordHash, ...history].slice(0, 5), 90 * 24 * 60 * 60);
+    await this.authRepo.resetPasswordConsumeToken({
+      userId: tokenRecord.userId,
+      newPasswordHash: nextHash,
+      tokenId: tokenRecord.id,
+    });
+    await this.redis.set(
+      `password-history:${user.id}`,
+      [user.passwordHash, ...history].slice(0, 5),
+      90 * 24 * 60 * 60,
+    );
     return { message: 'Password updated' };
   }
 
   async verifyEmail(dto: VerifyEmailDto) {
-    const tokens = await this.prisma.authToken.findMany({
-      where: { type: 'EMAIL_VERIFY', consumedAt: null, expiresAt: { gt: new Date() } },
-    });
+    const tokens = await this.authRepo.findEmailVerifyTokens();
     const tokenRecord = (
       await Promise.all(
         tokens.map(async (token) =>
@@ -295,10 +250,7 @@ export class AuthService {
       )
     ).find(Boolean);
     if (!tokenRecord) throw new UnauthorizedException(ERROR_CODES.AUTH_TOKEN_INVALID);
-    await this.prisma.authToken.update({
-      where: { id: tokenRecord.id },
-      data: { consumedAt: new Date() },
-    });
+    await this.authRepo.consumeEmailVerify(tokenRecord.id);
     return { message: 'Email verified' };
   }
 
@@ -308,10 +260,7 @@ export class AuthService {
       throw new BadRequestException('MFA secret generation failed');
     }
     const qrCodeDataUrl = await QRCode.toDataURL(secret.otpauth_url);
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { mfaSecretEncrypted: secret.base32 },
-    });
+    await this.authRepo.updateMfaPendingSecret(userId, secret.base32);
     const backupCodes = Array.from({ length: 8 }).map(() => crypto.randomBytes(4).toString('hex'));
     await this.redis.set(`mfa:backup:${userId}`, backupCodes, 365 * 24 * 60 * 60);
     return { qrCodeDataUrl, backupCodes };
@@ -320,23 +269,20 @@ export class AuthService {
   async enableMfa(userId: string, dto: SetupMfaDto) {
     const valid = await this.validateMfa(userId, dto.code, undefined);
     if (!valid) throw new UnauthorizedException(ERROR_CODES.AUTH_MFA_REQUIRED);
-    await this.prisma.user.update({ where: { id: userId }, data: { isMfaEnabled: true } });
+    await this.authRepo.enableMfa(userId);
     return { enabled: true };
   }
 
   async disableMfa(userId: string, dto: DisableMfaDto) {
     const valid = await this.validateMfa(userId, dto.code, undefined);
     if (!valid) throw new UnauthorizedException(ERROR_CODES.AUTH_MFA_REQUIRED);
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { isMfaEnabled: false, mfaSecretEncrypted: null },
-    });
+    await this.authRepo.disableMfa(userId);
     await this.redis.del(`mfa:backup:${userId}`);
     return { disabled: true };
   }
 
   private async validateMfa(userId: string, totpCode?: string, backupCode?: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.authRepo.findUserSecrets(userId);
     if (!user?.mfaSecretEncrypted) return false;
 
     if (backupCode) {

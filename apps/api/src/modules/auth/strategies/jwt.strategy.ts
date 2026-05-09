@@ -1,13 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
-import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionCacheService } from '../../../common/services/permission-cache.service';
+import { AuthRepository } from '../../../repositories/auth.repository';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly authRepository: AuthRepository,
     private readonly permissionCache: PermissionCacheService,
   ) {
     super({
@@ -17,23 +17,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: { sub: string }) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      include: {
-        roles: { include: { role: { include: { permissions: { include: { permission: true } } } } } },
-      },
-    });
-    if (!user) return null;
+  async validate(payload: { sub: string; email?: string }) {
+    const thin = await this.authRepository.findJwtIdentity(payload.sub);
+    if (!thin) return null;
 
-    const authz = await this.permissionCache.getPermissionsForUser(user.id);
+    const authz = await this.permissionCache.getPermissionsForUser(thin.id);
 
     return {
-      id: user.id,
-      email: user.email,
+      id: thin.id,
+      email: payload.email ?? thin.email,
       roles: authz.roles,
       permissions: authz.permissions,
-      isMfaEnabled: user.isMfaEnabled,
+      isMfaEnabled: thin.isMfaEnabled,
     };
   }
 }

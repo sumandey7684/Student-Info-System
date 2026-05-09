@@ -1,15 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { SubjectsRepository } from '../../repositories/subjects.repository';
 
 @Injectable()
 export class SubjectsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly subjectsRepo: SubjectsRepository) {}
 
   create(data: { name: string; code: string; departmentId?: string }) {
-    return this.prisma.subject.create({ data });
+    return this.subjectsRepo.create(data);
   }
 
   list() {
-    return this.prisma.subject.findMany({ where: { deletedAt: null }, include: { department: true } });
+    return this.subjectsRepo.findAllActive();
   }
 }
